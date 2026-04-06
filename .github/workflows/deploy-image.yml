@@ -9,6 +9,7 @@ env:
   IMAGE_NAME: ${{ github.repository }} # Isso vai virar algo como seu-usuario/statusapiteste
 
 jobs:
+  # Job para construir e enviar a imagem Docker para o GitHub Container Registry
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
@@ -39,3 +40,32 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           labels: ${{ steps.meta.outputs.labels }}
+
+  # Job para fazer o deploy da imagem Docker na EC2
+  deploy:
+    needs: build-and-push # Só roda se o build der certo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            # 1. Fazer login no Registro do GitHub dentro da EC2
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # 2. Parar e remover o container antigo (se existir)
+            docker stop api-status || true
+            docker rm api-status || true
+
+            # 3. Baixar a imagem mais nova
+            docker pull ghcr.io/${{ github.repository }}:latest
+
+            # 4. Rodar o novo container na porta 8080
+            docker run -d \
+              --name api-status \
+              -p 8080:8080 \
+              ghcr.io/${{ github.repository }}:latest
